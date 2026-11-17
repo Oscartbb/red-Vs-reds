@@ -67,7 +67,7 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[1] = "Vemonshank",
+	[1] = "Venomshank",
 	[2] = "Fraud",
 	[3] = "Spambox Battler",
 	[4] = "Drakocage",
