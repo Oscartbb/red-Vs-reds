@@ -51,7 +51,7 @@ local FRIENDLY_SPAWN_TYPE = "Friendly" -- first arg of SandboxSpawn for friendly
 
 local DEFAULT_DISABLE = false
 local DEFAULT_SANDBOX = false
-local DEFAULT_UNIT_LEVEL = 35
+local DEFAULT_UNIT_LEVEL = 10
 local DEFAULT_MAG = nil
 local DEFAULT_FORM = nil
 local DEFAULT_CANNON = "Default"
@@ -67,14 +67,14 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[1] = "Venomshank",
-	[2] = "Fraud",
-	[3] = "Spambox Battler",
-	[4] = "Drakocage",
-	[5] = "Sign Buddy",
-	[6] = "Dopamine",
-	[7] = "Flower",
-	[8] = "Oscar",
+	[1] = "Infernus",
+	[2] = "Lil Infernus",
+	[3] = "Lil Infernus",
+	[4] = "Lil Infernus",
+	[5] = "Lil Infernus",
+	[6] = "Lil Infernus",
+	[7] = "Lil Infernus",
+	[8] = "Lil Infernus",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
