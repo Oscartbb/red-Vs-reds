@@ -1,0 +1,1870 @@
+--[[
+	SANDBOX SPAWN MENU + CANNON + BANK (client)
+
+	While Blue Base has Sandbox == true, builds SandboxSpawnUI (8 slots, cannon, bank, Info)
+	and hides the real BattleScreen CannonButton, BankButton, Menu, Info, SpawnMenu, MobileSpawnMenu.
+	Re-executing applies the DEFAULT_* values and replaces the previous run.
+
+	SLOT NAMES
+	  "Battler"          -> enemy unit (enemy wins when a name exists in both)
+	  "Friendly Battler" -> friendly unit
+	  "Grunt"            -> friendly unit (only exists as friendly)
+	  Friendly spawn: SpawnTeamsSwap false -> spawn -> SpawnTeamsSwap true
+
+	CONTROLS
+	  1-4 / 5-8 = spawn, CannonBind = cannon, BankBind = upgrade bank,
+	  SwitchBind / MouseButton3 = switch bar
+
+	SANDBOX MODE (DEFAULT_SANDBOX = false by default): true = bank maxed + cash always full.
+	STARS: read from BattleScreen.StageName.Stars (Star3 > Star2 > Star1), falls back to config Stars.
+	TICK: change TICK_SCALE (lower = faster income).
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local UserInputService = game:GetService("UserInputService")
+local CollectionService = game:GetService("CollectionService")
+
+if _G.SandboxSpawnCleanup then
+	pcall(_G.SandboxSpawnCleanup)
+	_G.SandboxSpawnCleanup = nil
+end
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local NPCFolders = workspace:WaitForChild("NPCFolders")
+local BaseFolder = NPCFolders:WaitForChild("BaseFolder")
+local FriendlyFolder = NPCFolders:WaitForChild("FriendlyFolder")
+local EnemyFolder = NPCFolders:FindFirstChild("EnemyFolder")
+local Events = ReplicatedStorage:WaitForChild("Events")
+local RemoteFunction = Events:WaitForChild("RemoteFunction")
+local SandboxSettings = RemoteFunction:WaitForChild("SandboxSettings")
+local SandboxSpawn = RemoteFunction:WaitForChild("SandboxSpawn")
+local PlayerSpawn = RemoteFunction:WaitForChild("PlayerSpawn")
+
+local GUI_NAME = "SandboxSpawnUI"
+local REAL_HIDE = { "CannonButton", "BankButton", "Menu", "Info", "SpawnMenu", "MobileSpawnMenu" }
+local FRIENDLY_SPAWN_TYPE = "Friendly" -- first arg of SandboxSpawn for friendly units (change if needed)
+
+local DEFAULT_DISABLE = false
+local DEFAULT_SANDBOX = false
+local DEFAULT_UNIT_LEVEL = 35
+local DEFAULT_MAG = nil
+local DEFAULT_FORM = nil
+local DEFAULT_CANNON = "Default"
+local DEFAULT_BANK = "Default"
+local DEFAULT_COLOR = "Red"
+local DEFAULT_STARS = 1
+local DEFAULT_STATS = {
+	BankCapacity = 20,
+	BankIncome = 20,
+	EnemyBounty = 20,
+	UnitRecharge = 20,
+	UnitLimit = 20,
+	EarlyEconomy = 20,
+}
+local DEFAULT_SLOTS = {
+	[1] = "Battler",
+	[2] = "Trowel Battler",
+	[3] = "Sword Battler",
+	[4] = "Slinger Battler",
+	[5] = "Baller Battler",
+	[6] = "Rocket Battler",
+	[7] = "Bomb Battler",
+	[8] = "Titan Battler",
+}
+
+local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
+local TICK_SCALE = 1
+local BOUNTY_BASE = 0.1
+local GOLD_BOUNTY_MULT = 3 -- bounty multiplier for enemies marked with the Gold effect (Treasure)
+local TREASURE_FALLBACK = 125 -- cash if the server never sends a BonusCash event for Treasure
+
+local BankLibrary = {
+	["Default"] = {
+		image = 13195474128, imageRed = 118504698525076,
+		capacity = 500, income = 1, early = 0, bounty = 0, limit = 10, recharge = 1,
+		bankCost = 50, costPerStat = 25, maxLevel = 8,
+		capMult = 0.125, incMult = 0.5, earlyAdd = 50, bountyAdd = 0.15, limitMult = 0.1, rechargeMult = 0.05,
+	},
+	["Investment"] = {
+		image = 15190611605, imageRed = 83777401641341,
+		capacity = 500, income = 0.8, early = 0, bounty = 0, limit = 10, recharge = 1,
+		bankCost = 40, costPerStat = 20, maxLevel = 12,
+		capMult = 0.125, incMult = 0.5, earlyAdd = 50, bountyAdd = 0.1, limitMult = 0.1, rechargeMult = 0.05,
+	},
+	["Powerhouse"] = {
+		image = 15190611355, imageRed = 78080062414524,
+		capacity = 500, income = 1.2, early = 0, bounty = 0, limit = 10, recharge = 0.85,
+		bankCost = 40, costPerStat = 20, maxLevel = 8,
+		capMult = 0.125, incMult = 0.65, earlyAdd = 50, bountyAdd = 0.15, limitMult = 0.1, rechargeMult = 0.03,
+	},
+}
+
+-- Name = { recharge seconds (fallback), red design image id, blue design image id }
+local CannonLibrary = {
+	["Default"] = { 45, 14404777112, 13194947066 },
+	["Gatling"] = { 45, 14404776883, 13194946834 },
+	["Slammer"] = { 45, 14404776540, 13194946408 },
+	["Recoil"] = { 30, 14404776669, 13194946612 },
+	["Treasure"] = { 45, 14406863063, 14406862724 },
+	["Absorber"] = { 45, 16798782594, 16798782405 },
+	["Liberty"] = { 45, 71880213323404, 82046145240554 },
+	["Ionizer"] = { 45, 105376289918745, 124024599848848 },
+}
+
+-- Name = { id, form, recharge, image id, deploy cost }
+local EnemyLibrary = {
+	["Battler"] = {1, "A", 5, 12850272320, 50},
+	["Blonde Battler"] = {1, "B", 5, 11516777019, 50},
+	["Trowel Battler"] = {2, "A", 7, 12850270712, 100},
+	["Builder Battler"] = {2, "B", 7, 11516788556, 100},
+	["Sword Battler"] = {3, "A", 8, 12850271509, 150},
+	["Brigand Battler"] = {3, "B", 8, 11516786426, 150},
+	["Slinger Battler"] = {4, "A", 8, 12850271739, 200},
+	["Stunner Battler"] = {4, "B", 8, 12850270155, 200},
+	["Baller Battler"] = {5, "A", 10, 12850272626, 300},
+	["Soccer Battler"] = {5, "B", 10, 11516776363, 300},
+	["Rocket Battler"] = {6, "A", 14, 12850271940, 500},
+	["Crocket Battler"] = {6, "B", 20, 12850302053, 500},
+	["Bomb Battler"] = {7, "A", 15, 12850272186, 500},
+	["Kamikaze Battler"] = {7, "B", 25, 11516777818, 500},
+	["Titan Battler"] = {8, "A", 30, 12850270917, 1000},
+	["Telamon Battler"] = {8, "B", 30, 12850271240, 1000},
+	["Paintball Battler"] = {9, "A", 15, 18429905325, 400},
+	["Sniper Battler"] = {9, "B", 30, 12850270345, 1000},
+	["Speed Battler"] = {10, "A", 8, 13203237479, 200},
+	["Dual Speed Battler"] = {10, "B", 14, 13203238485, 500},
+	["Regen Battler"] = {11, "A", 6, 13203237813, 200},
+	["Dual Regen Battler"] = {11, "B", 12, 16952822491, 500},
+	["Gravity Battler"] = {12, "A", 5, 13203238184, 200},
+	["Dual Gravity Battler"] = {12, "B", 12, 13203239218, 400},
+	["Paintmaster"] = {13, "A", 5, 16952820368, 50},
+	["Terminator"] = {13, "B", 5, 16952822071, 50},
+	["Jetrock"] = {14, "A", 5, 13203236513, 50},
+	["Hellfighter"] = {14, "B", 5, 11708581938, 50},
+	["Hammer Battler"] = {15, "A", 10, 11541038601, 250},
+	["Banhammer Battler"] = {15, "B", 15, 11541035895, 500},
+	["Grenade Battler"] = {16, "A", 14, 11541051080, 500},
+	["Arson Battler"] = {16, "B", 32, 11541114362, 500},
+	["Doombringer"] = {17, "A", 5, 16952823463, 50},
+	["Deathbringer"] = {17, "B", 5, 82507792119454, 50},
+	["Dark Battler"] = {18, "B", 5, 12929363947, 50},
+	["Shield Battler"] = {19, "A", 5, 12929362943, 50},
+	["Dark Shield Battler"] = {19, "B", 5, 12929363584, 50},
+	["Dark Sword Battler"] = {20, "B", 8, 12929363384, 150},
+	["Rusher Battler"] = {21, "A", 8, 12929363174, 200},
+	["Dark Rusher Battler"] = {21, "B", 8, 12929363778, 200},
+	["Bomber Battler"] = {22, "A", 30, 12929365036, 500},
+	["Dark Bomber Battler"] = {22, "B", 30, 12929364185, 500},
+	["Speedster"] = {23, "A", 8, 13203234254, 200},
+	["Ragester"] = {23, "B", 14, 13203235417, 500},
+	["Regenerator"] = {24, "A", 7, 13203235022, 200},
+	["Magerator"] = {24, "B", 12, 13203236193, 500},
+	["Gravitator"] = {25, "A", 5, 13203236866, 200},
+	["Spiritator"] = {25, "B", 12, 13203233866, 500},
+	["Fusecoil"] = {26, "A", 45, 14741897014, 1000},
+	["Soulfuse"] = {26, "B", 45, 14742481910, 1000},
+	["Firebrand"] = {27, "A", 8, 14384966092, 150},
+	["Dual Firebrand"] = {27, "B", 8, 14384861560, 150},
+	["Arch"] = {28, "A", 8, 14384863912, 150},
+	["Nemesis"] = {28, "B", 8, 14384857592, 150},
+	["Gallant"] = {29, "A", 8, 14384859780, 150},
+	["Shieldman"] = {29, "B", 8, 16952819825, 150},
+	["Sailor Battler"] = {30, "A", 10, 14384860314, 250},
+	["Pirate Battler"] = {30, "B", 20, 14384966789, 500},
+	["Bucket Tagger"] = {31, "A", 10, 14384863073, 250},
+	["Treasure Seller"] = {31, "B", 20, 14384855778, 500},
+	["Cannonary"] = {32, "A", 8, 87764772690416, 150},
+	["Mercenary"] = {32, "B", 8, 74190792015652, 150},
+	["Captain Red"] = {33, "A", 5, 73095047270050, 50},
+	["Scarlet Storm"] = {33, "B", 5, 115104180027294, 50},
+	["Bugle Battler"] = {34, "A", 30, 14376833278, 500},
+	["Drummer Battler"] = {34, "B", 60, 14376832755, 1000},
+	["Guitar Trainee"] = {35, "A", 30, 14384858325, 500},
+	["Guitar Hero"] = {35, "B", 60, 14384858750, 1000},
+	["Cymbal Boy"] = {36, "A", 30, 14384862449, 500},
+	["Saxophone Man"] = {36, "B", 60, 14384856508, 1000},
+	["DJ Radical"] = {37, "A", 5, 14384862066, 50},
+	["Rockstar Radical"] = {37, "B", 5, 14384856738, 50},
+	["Spartan Battler"] = {38, "A", 15, 17321577141, 300},
+	["Barbaric Battler"] = {38, "B", 20, 17321577625, 600},
+	["Gargant"] = {39, "A", 45, 14384859416, 1000},
+	["Gehenna"] = {39, "B", 45, 14384865535, 1000},
+	["Turking"] = {40, "A", 5, 14384855375, 50},
+	["Infernus"] = {40, "B", 5, 14384858049, 50},
+	["Cake Battler"] = {41, "A", 5, 14743380610, 50},
+	["Puke Battler"] = {41, "B", 5, 14743378417, 50},
+	["Baker Battler"] = {42, "A", 5, 14743381713, 50},
+	["Fudge Battler"] = {42, "B", 5, 14743379793, 50},
+	["Mystery Battler"] = {43, "A", 5, 14743378928, 50},
+	["Enigma Battler"] = {43, "B", 5, 14743378057, 50},
+	["Birthday Battler"] = {44, "A", 20, 14743381170, 1000},
+	["Celebration Battler"] = {44, "B", 20, 14743380195, 1000},
+	["Icedagger Battler"] = {45, "A", 5, 15215070172, 50},
+	["Dual Icedagger Battler"] = {45, "B", 5, 15215069223, 50},
+	["Snowtrooper Battler"] = {46, "A", 20, 15215068637, 1000},
+	["Icegunner Battler"] = {46, "B", 20, 15215069085, 1000},
+	["Freeze Battler"] = {47, "A", 18, 15215069821, 300},
+	["Icicle Battler"] = {47, "B", 18, 15215068939, 300},
+	["Breaker Battler"] = {48, "A", 8, 15215070348, 150},
+	["Breacher Battler"] = {48, "B", 8, 15215070581, 150},
+	["Gale Battler"] = {49, "A", 12, 15215069633, 300},
+	["Mistral Battler"] = {49, "B", 40, 15215071469, 900},
+	["Icecaster Battler"] = {50, "A", 7, 15215069380, 100},
+	["Fowlcaster Battler"] = {50, "B", 7, 15215070015, 100},
+	["Frostburn Battler"] = {51, "A", 30, 15215433340, 800},
+	["Okami Battler"] = {51, "B", 30, 15215433144, 800},
+	["Stalagmight"] = {52, "A", 35, 15215071324, 800},
+	["Stalagcythe"] = {52, "B", 35, 15215068496, 800},
+	["Bedridden"] = {53, "A", 5, 15215070807, 50},
+	["Treachstone"] = {53, "B", 5, 18427420798, 50},
+	["Darkheart"] = {54, "A", 8, 16803331231, 150},
+	["Dual Darkheart"] = {54, "B", 8, 82799007845033, 150},
+	["Outlaw"] = {55, "A", 8, 16803329901, 200},
+	["Vigilante"] = {55, "B", 16, 16803331462, 600},
+	["Penny"] = {56, "A", 8, 16803329422, 150},
+	["Betty"] = {56, "B", 8, 16803332045, 150},
+	["Patrol"] = {57, "A", 8, 16803329726, 150},
+	["Principal"] = {57, "B", 8, 16803329027, 150},
+	["Butcher Battler"] = {58, "A", 20, 16784283024, 400},
+	["Chainsaw Battler"] = {58, "B", 35, 16784282725, 800},
+	["Amputator"] = {59, "A", 12, 77067383999639, 400},
+	["Necromancer"] = {59, "B", 12, 99283209352052, 400},
+	["Mad Scientist"] = {60, "A", 80, 16806460412, 1500},
+	["Crazy Chemist"] = {60, "B", 80, 16806461616, 1500},
+	["Doctor Despair"] = {61, "A", 5, 126696959976860, 50},
+	["Mister Mancer"] = {61, "B", 5, 16806958135, 50},
+	["Jester Battler"] = {62, "A", 30, 16784282084, 400},
+	["Terror Battler"] = {62, "B", 40, 16784281847, 600},
+	["Blinder"] = {63, "A", 30, 16803591461, 400},
+	["Confuddler"] = {63, "B", 30, 16868941370, 400},
+	["Monkey Bread"] = {64, "A", 30, 16806459824, 400},
+	["Gorilla Barrel"] = {64, "B", 30, 16806460931, 400},
+	["Littleman"] = {65, "A", 30, 16803330095, 400},
+	["Bloodhorn"] = {65, "B", 30, 16803331753, 400},
+	["Pianist"] = {66, "A", 150, 16803329160, 1500},
+	["Grandmaster"] = {66, "B", 150, 16803330351, 1500},
+	["Deleter"] = {67, "A", 5, 16806461353, 50},
+	["Expunger"] = {67, "B", 5, 16806461150, 50},
+	["Cloak Battler"] = {68, "A", 15, 127103449991739, 300},
+	["Cyber Battler"] = {68, "B", 25, 117312618569663, 600},
+	["Sapper"] = {69, "A", 15, 16803332972, 400},
+	["Stunlock"] = {69, "B", 30, 16803328361, 1000},
+	["Fatboy"] = {70, "A", 15, 16803330586, 500},
+	["Warhead"] = {70, "B", 30, 16803328099, 500},
+	["Insecure"] = {71, "A", 5, 16806958406, 50},
+	["Blackmail"] = {71, "B", 5, 16806959421, 50},
+	["EXEC"] = {72, "A", 15, 16806958739, 400},
+	["X-TREME"] = {72, "B", 30, 16806957815, 1000},
+	["Muffin"] = {73, "A", 5, 17192357183, 50},
+	["Fat Muffin"] = {73, "B", 5, 17192360146, 50},
+	["Sprinter Muffin"] = {74, "A", 8, 17192347806, 200},
+	["Exploder Muffin"] = {74, "B", 8, 17192360798, 200},
+	["Recruit Muffin"] = {75, "A", 10, 17192353935, 400},
+	["Soldier Muffin"] = {75, "B", 18, 17192351181, 800},
+	["Armored Muffin"] = {76, "A", 5, 17192364405, 50},
+	["Shielded Muffin"] = {76, "B", 5, 17192352640, 50},
+	["Cupcake"] = {77, "A", 30, 17192362027, 400},
+	["Cake"] = {77, "B", 30, 17192363200, 400},
+	["Bazooka Muffin"] = {78, "A", 20, 17192364060, 500},
+	["Robotic Muffin"] = {78, "B", 20, 17192353153, 500},
+	["Specialist Muffin"] = {79, "A", 5, 17192350329, 50},
+	["Anarchist Muffin"] = {79, "B", 5, 17192364963, 50},
+	["Cultist Muffin"] = {80, "A", 5, 17192361807, 50},
+	["Illuminist Muffin"] = {80, "B", 5, 17192359111, 50},
+	["Tank Muffin"] = {81, "A", 45, 17192347230, 1000},
+	["Prism Tank Muffin"] = {81, "B", 45, 17192355603, 1000},
+	["Catalog Muffin"] = {82, "A", 45, 17192362808, 1000},
+	["Doomsday Muffin"] = {82, "B", 45, 17192361166, 1000},
+	["Brand"] = {83, "A", 8, 17598835789, 150},
+	["Scorch"] = {83, "B", 30, 17598825899, 800},
+	["Birdshot"] = {84, "A", 8, 17598838208, 200},
+	["Bigshot"] = {84, "B", 8, 17598838614, 200},
+	["Artifact"] = {85, "A", 8, 17598839052, 150},
+	["Braverush"] = {85, "B", 8, 17598835352, 150},
+	["Boxtrot"] = {86, "A", 14, 17598836832, 500},
+	["Shankcut"] = {86, "B", 20, 17598824685, 500},
+	["Princess"] = {87, "A", 35, 17598826694, 800},
+	["Sweetheart"] = {87, "B", 35, 17598823399, 800},
+	["Burnout"] = {88, "A", 18, 17598834065, 300},
+	["Bottled"] = {88, "B", 18, 17598837327, 300},
+	["Boffin"] = {89, "A", 10, 17598840868, 200},
+	["Brainiac"] = {89, "B", 18, 17598836235, 500},
+	["Clifford"] = {90, "A", 45, 17598833561, 1000},
+	["Sunbeam"] = {90, "B", 45, 17598823848, 1000},
+	["Razor"] = {91, "A", 8, 17598826227, 150},
+	["Edgelord"] = {91, "B", 8, 17598827496, 150},
+	["Shader"] = {92, "A", 8, 17598825100, 200},
+	["Sparkle"] = {92, "B", 8, 17598824293, 200},
+	["Mobster"] = {93, "A", 18, 17598827930, 800},
+	["Kingpin"] = {93, "B", 18, 17598828444, 800},
+	["CRIME"] = {94, "A", 14, 17598832205, 500},
+	["PRIME"] = {94, "B", 20, 17598827066, 500},
+	["Slenderhead"] = {95, "A", 30, 17598832953, 400},
+	["Screecherhead"] = {95, "B", 30, 17598831132, 400},
+	["Jeff"] = {96, "A", 15, 17598828812, 300},
+	["Omor"] = {96, "B", 15, 17598829503, 300},
+	["Gamblecore"] = {97, "A", 10, 17598830163, 100},
+	["Ransomware"] = {97, "B", 999, 17598830603, 1000},
+	["Zipbomb"] = {98, "A", 15, 17598839628, 500},
+	["Redzone"] = {98, "B", 15, 17598831660, 500},
+	["Windforce"] = {99, "A", 8, 121506089970418, 150},
+	["Dual Windforce"] = {99, "B", 8, 132037659433102, 150},
+	["Flight"] = {100, "A", 12, 112782070091200, 300},
+	["Jolly"] = {100, "B", 24, 98315937842762, 800},
+	["Knight"] = {101, "A", 10, 97122162116946, 400},
+	["Pwnsalot"] = {101, "B", 15, 99932147602712, 600},
+	["Airhead"] = {102, "A", 12, 120702491467835, 300},
+	["Skittle"] = {102, "B", 24, 105050190148834, 800},
+	["Mage Battler"] = {103, "A", 16, 77693151326804, 400},
+	["Dryad Battler"] = {103, "B", 26, 100575523512464, 800},
+	["Viking"] = {104, "A", 45, 98635973123887, 1000},
+	["Norman"] = {104, "B", 45, 80070395605198, 1000},
+	["Henchman"] = {105, "A", 5, 104064346473538, 50},
+	["Trollage"] = {105, "B", 5, 96355102285205, 50},
+	["Mystery II Battler"] = {106, "A", 5, 84764550079507, 50},
+	["Enigma II Battler"] = {106, "B", 5, 129556738361910, 50},
+	["Pancake"] = {107, "A", 20, 83890208454865, 1000},
+	["Allan"] = {107, "B", 20, 99434675951802, 1000},
+	["American Fatboy"] = {108, "A", 15, 119012632637580, 500},
+	["Patriot Warhead"] = {108, "B", 30, 131694216059584, 500},
+	["Cyborg Rocket Battle"] = {109, "A", 14, 88847073122886, 500},
+	["Cyborg Crocket Battle"] = {109, "B", 20, 130787159183040, 500},
+	["Monsalt"] = {110, "A", 5, 125549008674056, 50},
+	["Monolith"] = {110, "B", 5, 85266634952788, 50},
+	["Stagger Battler"] = {111, "A", 20, 112197111372878, 300},
+	["Slasher Battler"] = {111, "B", 30, 81568040849323, 600},
+	["Ire"] = {112, "A", 8, 90358530101103, 150},
+	["Fury"] = {112, "B", 8, 118958410966972, 150},
+	["Grappler"] = {113, "A", 14, 75770142671624, 500},
+	["Crusader"] = {113, "B", 20, 76087452253792, 500},
+	["Singer"] = {114, "A", 60, 87412679430996, 1000},
+	["Vocalist"] = {114, "B", 60, 87068647625440, 1000},
+	["Judgement"] = {115, "A", 12, 138480666275704, 300},
+	["Punishment"] = {115, "B", 12, 105951430845448, 300},
+	["McBurn"] = {116, "A", 8, 118329547411169, 150},
+	["McBlast"] = {116, "B", 8, 136455312606031, 150},
+	["Martyr"] = {117, "A", 45, 126436440731127, 1000},
+	["Reinbo"] = {117, "B", 45, 115270522741756, 1000},
+	["Killbot"] = {118, "A", 8, 84094763071968, 150},
+	["Atomic"] = {118, "B", 8, 99751207323330, 150},
+	["Beacon"] = {119, "A", 12, 132659318239786, 300},
+	["Ultimate"] = {119, "B", 12, 80865549280881, 300},
+	["Teapot Battler"] = {120, "A", 60, 116242605370391, 1000},
+	["Newell Battler"] = {120, "B", 90, 136987505813163, 2000},
+	["Father"] = {121, "A", 5, 99450630326994, 50},
+	["Crusher"] = {121, "B", 5, 131089801874169, 50},
+	["Cesus"] = {122, "A", 50, 105164592598364, 1000},
+	["Chronos"] = {122, "B", 50, 97908764845483, 1000},
+	["Warrior"] = {123, "A", 8, 78774999225737, 150},
+	["Champion"] = {123, "B", 8, 76940490451196, 150},
+	["Hunter"] = {124, "A", 8, 121135882950425, 150},
+	["Arbalest"] = {124, "B", 8, 127082121878615, 150},
+	["Damned"] = {125, "A", 8, 136552766518907, 150},
+	["Tormented"] = {125, "B", 8, 119622495285491, 150},
+	["Caster"] = {126, "A", 12, 109447262648572, 300},
+	["Bloodcaster"] = {126, "B", 40, 80647430142541, 900},
+	["Carcass"] = {127, "A", 5, 105919854257271, 50},
+	["Cadaver"] = {127, "B", 5, 105167550690355, 50},
+	["Admirer"] = {128, "A", 90, 119460140487878, 1500},
+	["Acolyte"] = {128, "B", 90, 116453941945659, 1500},
+	["Apostle"] = {129, "A", 5, 84181447847420, 50},
+	["Outcast"] = {129, "B", 5, 123785629404877, 50},
+	["Venomshank"] = {130, "A", 8, 105551073284323, 150},
+	["Dual Venomshank"] = {130, "B", 8, 119379878971042, 150},
+	["Chuck"] = {131, "A", 5, 101458482021684, 50},
+	["Cartil"] = {131, "B", 5, 79883990745998, 50},
+	["Cheez"] = {132, "A", 5, 78418363242604, 50},
+	["Chardy"] = {132, "B", 5, 134706478876876, 50},
+	["Bean Battler"] = {133, "A", 5, 112837952725959, 50},
+	["Burrito Battler"] = {133, "B", 5, 73442503713545, 50},
+	["Ghostwalker"] = {134, "A", 8, 111330269374099, 150},
+	["Dual Ghostwalker"] = {134, "B", 8, 100890918059250, 150},
+	["Sign Buddy"] = {135, "A", 30, 112408609393292, 400},
+	["Fish Buddy"] = {135, "B", 30, 135363610325708, 400},
+	["Pizza Pal"] = {136, "A", 30, 88373438332027, 400},
+	["Delivery Pal"] = {136, "B", 30, 98542380984607, 400},
+	["Chef Sarge"] = {137, "A", 5, 124762546012797, 50},
+	["Sargent"] = {137, "B", 5, 118342016317133, 50},
+	["Bouncer"] = {138, "A", 14, 138901955422061, 500},
+	["Cyclist"] = {138, "B", 14, 82265855761528, 500},
+	["Klown"] = {139, "A", 14, 110732783187685, 500},
+	["Kreep"] = {139, "B", 14, 118842537992711, 500},
+	["Duck Battler"] = {140, "A", 10, 80034933221472, 300},
+	["Epikduck Battler"] = {140, "B", 10, 94059495697985, 600},
+	["Swinburne"] = {141, "A", 8, 83876514846542, 150},
+	["Algernon"] = {141, "B", 8, 133612820463025, 150},
+	["Drakocage"] = {142, "A", 10, 83561747832794, 300},
+	["Monfined"] = {142, "B", 10, 105668921150946, 600},
+	["FunK1d"] = {143, "A", 5, 83438522328225, 50},
+	["GameK1d"] = {143, "B", 5, 133329296330298, 50},
+	["Fraud"] = {144, "A", 8, 95151669433871, 150},
+	["Graft"] = {144, "B", 8, 72895427408736, 150},
+	["Dopamine"] = {145, "A", 5, 112952040288469, 50},
+	["Dendritic"] = {145, "B", 5, 106386790278731, 50},
+	["Spambox Battler"] = {146, "A", 60, 113475537463321, 1500},
+	["Sorcus Battler"] = {146, "B", 60, 100089222535473, 1500},
+	["Flower"] = {147, "A", 30, 121832129323480, 400},
+	["Depriver"] = {147, "B", 30, 132366636203285, 400},
+	["Oscar"] = {148, "A", 30, 115201973336877, 1000},
+	["Edmond"] = {148, "B", 30, 78296482881898, 1000},
+	["Lichen"] = {149, "A", 5, 103659697029178, 50},
+	["Mortis"] = {149, "B", 5, 96063407054957, 50},
+	["Roadbumper"] = {150, "A", 25, 88254455282959, 600},
+	["Speeddemon"] = {150, "B", 60, 89104636631773, 1200},
+	["Dark Pelican"] = {151, "A", 30, 110520749255561, 1000},
+	["Pancake Pelican Of Truth"] = {151, "B", 30, 131518147136426, 1000},
+}
+
+-- Same structure as EnemyLibrary: Name = { id, form, recharge, image id, deploy cost }
+-- Use "Friendly <Name>" in a slot to force the friendly version when the name also exists as an enemy.
+local FriendlyLibrary = {
+	["Battler"] = {1, "A", 5, 12598324409, 50},
+	["Blonde Battler"] = {1, "B", 5, 11516776756, 50},
+	["Trowel Battler"] = {2, "A", 7, 12598088828, 100},
+	["Builder Battler"] = {2, "B", 7, 12598106659, 100},
+	["Sword Battler"] = {3, "A", 6, 12598091123, 150},
+	["Brigand Battler"] = {3, "B", 6, 11516787027, 150},
+	["Slinger Battler"] = {4, "A", 8, 12598092917, 200},
+	["Stunner Battler"] = {4, "B", 8, 12598366487, 200},
+	["Baller Battler"] = {5, "A", 10, 12598326174, 300},
+	["Soccer Battler"] = {5, "B", 10, 12598092150, 300},
+	["Rocket Battler"] = {6, "A", 12, 12598093658, 500},
+	["Crocket Battler"] = {6, "B", 18, 12598105177, 500},
+	["Bomb Battler"] = {7, "A", 15, 12598107965, 500},
+	["Kamikaze Battler"] = {7, "B", 25, 12598099714, 500},
+	["Titan Battler"] = {8, "A", 35, 12598089874, 1000},
+	["Telamon Battler"] = {8, "B", 35, 12598090521, 1000},
+	["Paintball Battler"] = {9, "A", 15, 18429906983, 400},
+	["Sniper Battler"] = {9, "B", 30, 12598092615, 800},
+	["Speed Battler"] = {10, "A", 8, 13203198911, 200},
+	["Dual Speed Battler"] = {10, "B", 12, 13203200128, 400},
+	["Regen Battler"] = {11, "A", 6, 13203199304, 200},
+	["Dual Regen Battler"] = {11, "B", 12, 16952823029, 400},
+	["Gravity Battler"] = {12, "A", 5, 13203199719, 200},
+	["Dual Gravity Battler"] = {12, "B", 12, 13203200855, 400},
+	["Grunt"] = {13, "A", 10, 117809584406096, 400},
+	["Mafia Grunt"] = {13, "B", 18, 78190334731966, 800},
+	["Papaler"] = {14, "A", 20, 12598094867, 1000},
+	["Ol' Papaler"] = {14, "B", math.huge, 120468725904867, 10000},
+	["Grenade Battler"] = {15, "A", 16, 11541058574, 500},
+	["Arson Battler"] = {15, "B", 16, 11541112399, 500},
+	["Hammer Battler"] = {16, "A", 6, 11541031845, 250},
+	["Banhammer Battler"] = {16, "B", 6, 11541026081, 500},
+	["Golden Hammer"] = {17, "A", 6, 12598102811, 500},
+	["Golden Banhammer"] = {17, "B", 6, 12598103088, 1000},
+	["Ninja Battler"] = {18, "A", 10, 12598096397, 300},
+	["Assassin Battler"] = {18, "B", 10, 12598111579, 300},
+	["Healer Battler"] = {19, "A", 10, 12598101449, 200},
+	["Medic Battler"] = {19, "B", 18, 12598097867, 500},
+	["Slateskin Battler"] = {20, "A", 10, 12598099958, 200},
+	["Ceramic Battler"] = {20, "B", 18, 12598106349, 300},
+	["Cola Battler"] = {21, "A", 15, 12598105506, 200},
+	["Binge Cola Battler"] = {21, "B", 25, 12598109145, 200},
+	["Brew Battler"] = {22, "A", 15, 12598107156, 200},
+	["Binge Brew Battler"] = {22, "B", 25, 12849508467, 200},
+	["Goala Battler"] = {23, "A", 15, 12598103363, 200},
+	["Binge Goala Battler"] = {23, "B", 25, 12598108676, 200},
+	["Hobo Battler"] = {24, "A", 3, 12598100301, 100},
+	["Hoarder Battler"] = {24, "B", 6, 12598100703, 100},
+	["Officer Battler"] = {25, "A", 8, 12598073969, 400},
+	["Sheriff Battler"] = {25, "B", 16, 12598093399, 400},
+	["Gamble Battler"] = {26, "A", 10, 12598249809, 300},
+	["Luckroll Battler"] = {26, "B", 10, 12598098787, 900},
+	["Prankster Battler"] = {27, "A", 12, 12598094428, 200},
+	["Tomfoolery Battler"] = {27, "B", 18, 12598089220, 500},
+	["Megaphone Battler"] = {28, "A", 20, 12598097435, 600},
+	["Micspammer Battler"] = {28, "B", 80, 12598096898, 1200},
+	["Chairman"] = {29, "A", 15, 12598105927, 500},
+	["Raigquitter"] = {29, "B", 80, 12598249589, 1500},
+	["Tix Collector"] = {30, "A", 15, 12598089561, 100},
+	["B. Money"] = {30, "B", 999, 12598111103, 1000},
+	["Wes"] = {31, "A", 40, 12598088096, 800},
+	["Maxwell"] = {31, "B", 40, 12598098312, 800},
+	["RAIG"] = {32, "A", 0, 14393526457, 0},
+	["RAIG COLOSSAL"] = {32, "B", 999, 14393526145, 0},
+	["Lil' Doombringer"] = {33, "A", 40, 16952821023, 800},
+	["Lil' Deathbringer"] = {33, "B", 40, 136240154238419, 800},
+	["Lil' Turking"] = {34, "A", 60, 14393125879, 800},
+	["Lil' Infernus"] = {34, "B", 60, 14393126244, 800},
+	["Lil' EXEC"] = {35, "A", 80, 16792618152, 1000},
+	["Lil' X-TREME"] = {35, "B", 80, 16792617891, 1000},
+	["Lil' Cesus"] = {36, "A", 100, 78639064131095, 1000},
+	["Lil' Chronos"] = {36, "B", 100, 78429531081181, 1000},
+	["Lil' Lichen"] = {37, "A", 120, 126293450518637, 1200},
+	["FLY"] = {37, "B", math.huge, 10741051688, 1},
+	["Tumored Battler"] = {41, "A", 5, 126175931690348, 50},
+	["Tarnished Battler"] = {41, "B", 200, 71191353198406, 3000},
+	["Tumored Trowel"] = {42, "A", 7, 139010417045669, 100},
+	["Tarnished Trowel"] = {42, "B", 300, 71982232188230, 3000},
+	["Tumored Sword"] = {43, "A", 6, 17155619041, 150},
+	["Tarnished Sword"] = {43, "B", 400, 77741018062863, 4000},
+	["Tumored Slinger"] = {44, "A", 8, 113073676506488, 200},
+	["Tarnished Slinger"] = {44, "B", 400, 96433204771913, 4000},
+	["Tumored Baller"] = {45, "A", 10, 82247881278906, 300},
+	["Sailor Battler"] = {49, "A", 10, 14384978910, 250},
+	["Pirate Battler"] = {49, "B", 20, 14384979655, 500},
+	["Bugle Battler"] = {50, "A", 40, 14376820825, 500},
+	["Drummer Battler"] = {50, "B", 80, 14376820336, 1000},
+	["Boxer Battler"] = {51, "A", 8, 13863828527, 200},
+	["Shanker Battler"] = {51, "B", 8, 13863812490, 200},
+	["Coil Battler"] = {52, "A", 40, 13863812225, 500},
+	["Rail Battler"] = {52, "B", 80, 13863811952, 1500},
+	["Expo Battler"] = {53, "A", 20, 13863811659, 500},
+	["Vulcan Battler"] = {53, "B", 60, 13863811344, 1500},
+	["Fireball Battler"] = {54, "A", 15, 13863810974, 200},
+	["Ignis Battler"] = {54, "B", 60, 13863810626, 900},
+	["Iceball Battler"] = {55, "A", 10, 13863810320, 200},
+	["Frigus Battler"] = {55, "B", 60, 13863810063, 900},
+	["Spartan Battler"] = {56, "A", 12, 17321576691, 300},
+	["Barbaric Battler"] = {56, "B", 24, 17321578314, 600},
+	["Mu"] = {57, "A", 15, 16794767724, 400},
+	["Crimson"] = {57, "B", 100, 16794767868, 2000},
+	["Flashlight Battler"] = {58, "A", 15, 14496633957, 200},
+	["Lantern Battler"] = {58, "B", 25, 14496632294, 500},
+	["Archer Battler"] = {59, "A", 15, 16784286201, 300},
+	["Crossbow Battler"] = {59, "B", 18, 16784284475, 300},
+	["Fencer Battler"] = {60, "A", 10, 16784285276, 200},
+	["Scherma Battler"] = {60, "B", 20, 16784278775, 600},
+	["Miner Battler"] = {61, "A", 10, 16784280762, 200},
+	["Prospect Battler"] = {61, "B", 20, 16784280043, 600},
+	["Hurtorb Battler"] = {62, "A", 24, 14496633042, 600},
+	["Healorb Battler"] = {62, "B", 34, 14496633477, 600},
+	["Motorbike Battler"] = {63, "A", 25, 14496631336, 600},
+	["Hyperbike Battler"] = {63, "B", 60, 14496632639, 1200},
+	["Birthday Battler"] = {64, "A", 20, 14743393596, 1000},
+	["Celebration Battler"] = {64, "B", 20, 14743393081, 1000},
+	["Conjuror"] = {65, "A", 80, 15606461760, 500},
+	["Trebuchet"] = {65, "B", 160, 15295903021, 1500},
+	["Dark Reaper"] = {66, "A", 20, 15295903631, 600},
+	["Lord Skelly"] = {66, "B", 80, 15295903258, 1200},
+	["FRIEND"] = {67, "A", 100, 15305514044, 2000},
+	["OMEGA FRIEND"] = {67, "B", 100, 15305513909, 2000},
+	["Intern Elf"] = {68, "A", 16, 15655144293, 600},
+	["Mall Santa"] = {68, "B", 16, 15655143829, 600},
+	["Trainee Battler"] = {69, "A", 3, 15655142938, 100},
+	["Drafted Battler"] = {69, "B", 6, 15655145056, 200},
+	["Butcher Battler"] = {70, "A", 15, 16784285547, 400},
+	["Chainsaw Battler"] = {70, "B", 30, 16784285120, 800},
+	["Jester Battler"] = {71, "A", 20, 16784281010, 300},
+	["Terror Battler"] = {71, "B", 40, 16784279004, 600},
+	["Cloak Battler"] = {72, "A", 15, 92407301643985, 300},
+	["Cyber Battler"] = {72, "B", 25, 99188234682294, 600},
+	["Spiked Battler"] = {73, "A", 10, 16784279217, 300},
+	["Barbed Battler"] = {73, "B", 25, 16784285904, 600},
+	["Retro Battler"] = {74, "A", 10, 16784279493, 300},
+	["Atari Battler"] = {74, "B", 15, 16784284737, 600},
+	["Farmer Battler"] = {75, "A", 10, 16784281606, 200},
+	["Rancher Battler"] = {75, "B", 20, 16784279683, 600},
+	["Glass Battler"] = {76, "A", 25, 16784281308, 400},
+	["Payload Battler"] = {76, "B", 40, 16784280308, 600},
+	["Psi"] = {77, "A", 25, 16784286821, 400},
+	["Noir"] = {77, "B", 100, 16784280474, 2000},
+	["Protest Battler"] = {78, "A", 80, 17192354634, 1000},
+	["Outcry Battler"] = {78, "B", 80, 17192356566, 1000},
+	["Batter Battler"] = {79, "A", 12, 18429734499, 300},
+	["Striker Battler"] = {79, "B", 24, 73502400600668, 600},
+	["Winged Battler"] = {80, "A", 12, 18429958312, 300},
+	["Jetpack Battler"] = {80, "B", 24, 18429959020, 800},
+	["Operator"] = {81, "A", 120, 18430028587, 1500},
+	["Commander"] = {81, "B", 120, 18430029088, 1500},
+	["Mage Battler"] = {82, "A", 16, 81053555547289, 400},
+	["Dryad Battler"] = {82, "B", 26, 101610171434886, 600},
+	["Stagger Battler"] = {83, "A", 10, 111569424516008, 300},
+	["Slasher Battler"] = {83, "B", 15, 130102531347493, 600},
+	["Teapot Battler"] = {84, "A", 60, 125921206375639, 1500},
+	["Newell Battler"] = {84, "B", 80, 139740315476925, 1500},
+	["Sleepy Battler"] = {85, "A", 8, 118109181799565, 200},
+	["Nighty Battler"] = {85, "B", 8, 74498546002351, 200},
+	["Remote Battler"] = {86, "A", 15, 115118871539042, 500},
+	["Occult Battler"] = {86, "B", 30, 83740392634751, 800},
+	["Werewolf Battler"] = {87, "A", 15, 100952176849588, 400},
+	["Beastly Battler"] = {87, "B", 25, 94832843535194, 800},
+	["Iota"] = {88, "A", 40, 127024732552325, 400},
+	["Ivory"] = {88, "B", 200, 90622086957377, 2000},
+	["Gruntkeeper"] = {89, "A", 10, 104240736551767, 400},
+	["Gruntlord"] = {89, "B", 180, 112985686804249, 2000},
+	["Cowboy Battler"] = {90, "A", 12, 110149485727934, 300},
+	["Gunslinger Battler"] = {90, "B", 24, 89809227420987, 600},
+	["Moai Battler"] = {91, "A", 45, 103631610353318, 900},
+	["Tiki Battler"] = {91, "B", 45, 85121522462274, 900},
+	["Prototype Battler"] = {92, "A", 40, 107714826685850, 500},
+	["Archetype Battler"] = {92, "B", 80, 93954272495632, 1000},
+	["Bluesteel"] = {93, "A", 200, 89102554833899, 2000},
+	["Goldaurum"] = {93, "B", 200, 110756792285196, 2000},
+	["Bean Battler"] = {94, "A", 25, 88055730418123, 400},
+	["Burrito Battler"] = {94, "B", 25, 130055877802195, 400},
+	["Duck Battler"] = {95, "A", 10, 88634552889073, 400},
+	["Epikduck Battler"] = {95, "B", 10, 84156753199135, 400},
+	["Volleyball Battler"] = {96, "A", 20, 137065730337158, 300},
+	["Basketball Battler"] = {96, "B", 20, 140181117345226, 600},
+	["Parasol Battler"] = {97, "A", 20, 83252753539349, 300},
+	["Umbrella Battler"] = {97, "B", 45, 73100809526135, 800},
+	["Hockey Battler"] = {98, "A", 10, 111022643007568, 500},
+	["Jason Battler"] = {98, "B", 10, 79913388551597, 500},
+	["Glizzy Battler"] = {99, "A", 45, 115149842212728, 1000},
+	["Gymbro Battler"] = {99, "B", 45, 109404853756917, 1000},
+	["Steampunk Battler"] = {100, "A", 30, 134529749109074, 600},
+	["Telepunk Battler"] = {100, "B", 45, 106911549017301, 600},
+	["Spambox Battler"] = {101, "A", 60, 73426548312319, 1500},
+	["Sorcus Battler"] = {101, "B", 60, 100400746490629, 1500},
+	["Gamma"] = {102, "A", 20, 75529887363727, 400},
+	["Chartreuse"] = {102, "B", 200, 123553274025842, 2000},
+	["Blaze"] = {103, "A", 100, 115619088212015, 1500},
+	["Micro"] = {103, "B", 100, 84532737671285, 1500},
+}
+
+-- Enemy wins when a name exists in both. "Friendly X" forces the friendly unit.
+local function ResolveUnit(name)
+	if not name or name == "" then return nil, false end
+	local stripped = string.match(name, "^Friendly (.+)$")
+	if stripped and FriendlyLibrary[stripped] then
+		return FriendlyLibrary[stripped], true
+	end
+	if EnemyLibrary[name] then
+		return EnemyLibrary[name], false
+	end
+	if FriendlyLibrary[name] then
+		return FriendlyLibrary[name], true
+	end
+	return nil, false
+end
+
+local ConfigFolder = workspace:FindFirstChild("SandboxSpawnConfig")
+if not ConfigFolder then
+	ConfigFolder = Instance.new("Folder")
+	ConfigFolder.Name = "SandboxSpawnConfig"
+	ConfigFolder.Parent = workspace
+end
+
+local function SetConfig(class, name, value)
+	local v = ConfigFolder:FindFirstChild(name)
+	if not v then
+		v = Instance.new(class)
+		v.Name = name
+		v.Parent = ConfigFolder
+	end
+	v.Value = value
+end
+
+SetConfig("BoolValue", "DisableSpawnMenu", DEFAULT_DISABLE)
+SetConfig("BoolValue", "SandboxMode", DEFAULT_SANDBOX)
+SetConfig("IntValue", "UnitLevel", DEFAULT_UNIT_LEVEL)
+SetConfig("NumberValue", "Magnification", DEFAULT_MAG or 0)
+SetConfig("StringValue", "ForceForm", DEFAULT_FORM or "")
+SetConfig("StringValue", "CannonType", DEFAULT_CANNON)
+SetConfig("StringValue", "BankType", DEFAULT_BANK)
+SetConfig("StringValue", "LoadoutColor", DEFAULT_COLOR)
+SetConfig("IntValue", "Stars", DEFAULT_STARS)
+for _, key in ipairs(STAT_KEYS) do
+	SetConfig("IntValue", "Stat" .. key, DEFAULT_STATS[key] or 0)
+end
+for i = 1, 8 do
+	SetConfig("StringValue", "Slot" .. i, DEFAULT_SLOTS[i] or "")
+end
+
+local GenValue = ConfigFolder:FindFirstChild("Generation")
+if not GenValue then
+	GenValue = Instance.new("IntValue")
+	GenValue.Name = "Generation"
+	GenValue.Parent = ConfigFolder
+end
+GenValue.Value = GenValue.Value + 1
+local MyGen = GenValue.Value
+
+local old = PlayerGui:FindFirstChild(GUI_NAME)
+if old then old:Destroy() end
+
+local function New(class, parent, props)
+	local obj = Instance.new(class)
+	if props then
+		for k, v in pairs(props) do
+			obj[k] = v
+		end
+	end
+	obj.Parent = parent
+	return obj
+end
+
+local function Gradient(parent, colors)
+	local g = Instance.new("UIGradient")
+	g.Rotation = 90
+	if typeof(colors) == "ColorSequence" then
+		g.Color = colors
+	else
+		g.Color = ColorSequence.new(table.unpack(colors))
+	end
+	g.Parent = parent
+	return g
+end
+
+local function Stroke(parent, color, thickness, mode)
+	return New("UIStroke", parent, {
+		Color = color,
+		Thickness = thickness,
+		LineJoinMode = Enum.LineJoinMode.Bevel,
+		ApplyStrokeMode = mode or Enum.ApplyStrokeMode.Contextual,
+	})
+end
+
+local SlotGradient = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(183, 200, 221)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(239, 239, 239)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(183, 200, 221)),
+})
+
+-- gradients copied from the real BattleScreen
+local WHITE_BLUE = Color3.fromRGB(217, 232, 255)
+local YellowGrad = { WHITE_BLUE, Color3.fromRGB(221, 135, 29) }
+local BlueGrad = { WHITE_BLUE, Color3.fromRGB(89, 118, 221) }
+local YELLOW_TEXT = Color3.fromRGB(255, 246, 106)
+local YELLOW_STROKE = Color3.fromRGB(95, 74, 0)
+local BLUE_STROKE = Color3.fromRGB(0, 81, 135)
+
+local Themes = {
+	red = {
+		mainGrad = { Color3.fromRGB(217, 232, 255), Color3.fromRGB(221, 91, 93) },
+		mainStroke = Color3.fromRGB(154, 0, 3),
+		barGrad = { Color3.fromRGB(217, 232, 255), Color3.fromRGB(221, 0, 0) },
+		fill = Color3.fromRGB(255, 103, 103),
+		fillStroke = Color3.fromRGB(173, 0, 0),
+		barStroke = Color3.fromRGB(95, 0, 0),
+		textColor = Color3.fromRGB(255, 87, 90),
+		slotStroke = Color3.fromRGB(255, 0, 0),
+		slotStrokeOff = Color3.fromRGB(120, 0, 0),
+	},
+	blue = {
+		mainGrad = { Color3.fromRGB(217, 232, 255), Color3.fromRGB(0, 125, 221) },
+		mainStroke = Color3.fromRGB(0, 60, 154),
+		barGrad = { Color3.fromRGB(217, 232, 255), Color3.fromRGB(0, 125, 221) },
+		fill = Color3.fromRGB(103, 202, 255),
+		fillStroke = Color3.fromRGB(0, 101, 173),
+		barStroke = Color3.fromRGB(0, 54, 95),
+		textColor = Color3.fromRGB(87, 160, 255),
+		slotStroke = Color3.fromRGB(0, 150, 167),
+		slotStrokeOff = Color3.fromRGB(0, 70, 120),
+	},
+}
+
+local function GetTheme(name)
+	return Themes[string.lower(tostring(name or ""))] or Themes.red
+end
+
+local CurrentTheme = Themes.red
+
+local function LightUp(button, enabled)
+	if not button then return end
+	if string.sub(button.Name, 1, 4) == "Slot" then
+		for _, d in button:GetDescendants() do
+			if d:IsA("UIStroke") and d.ApplyStrokeMode == Enum.ApplyStrokeMode.Border then
+				d.Color = enabled and CurrentTheme.slotStroke or CurrentTheme.slotStrokeOff
+			end
+		end
+	end
+	if enabled then
+		button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		button.ImageColor3 = Color3.fromRGB(255, 255, 255)
+		button.AutoButtonColor = true
+	else
+		button.BackgroundColor3 = Color3.fromRGB(129, 129, 129)
+		button.ImageColor3 = Color3.fromRGB(129, 129, 129)
+		button.AutoButtonColor = false
+	end
+end
+
+local function CloneSound(folder, sound)
+	if not folder or not sound then return end
+	local s = sound:Clone()
+	s.Parent = folder
+	s:Play()
+	Debris:AddItem(s, (s.TimeLength * s.PlaybackSpeed) + 0.15)
+end
+
+local function AliveCount()
+	local n = 0
+	for _, npc in FriendlyFolder:GetChildren() do
+		if npc:GetAttribute("ConfusedTime") or npc:GetAttribute("NoClog") then continue end
+		local hum = npc:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			n += 1
+		end
+	end
+	return n
+end
+
+local function IsSandbox()
+	local blue = BaseFolder:FindFirstChild("Blue Base")
+	return blue ~= nil and blue:GetAttribute("Sandbox") == true, blue
+end
+
+local function IsEitherBaseDead()
+	for _, name in ipairs({ "Blue Base", "Red Base" }) do
+		local base = BaseFolder:FindFirstChild(name)
+		if base then
+			local hum = base:FindFirstChildOfClass("Humanoid")
+			if hum and hum.Health <= 0 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+-- Star3 visible > Star2 visible > Star1, read from the real BattleScreen
+local function DetectStars(fallback)
+	local real = PlayerGui:FindFirstChild("BattleScreen")
+	local stars = real and real:FindFirstChild("StageName") and real.StageName:FindFirstChild("Stars")
+	if stars then
+		local s3, s2, s1 = stars:FindFirstChild("Star3"), stars:FindFirstChild("Star2"), stars:FindFirstChild("Star1")
+		if s3 and s3.Visible then return 3 end
+		if s2 and s2.Visible then return 2 end
+		if s1 and s1.Visible then return 1 end
+	end
+	return fallback
+end
+
+-- Reads the real CannonButton image id (red or blue design) and returns the matching cannon name
+local function DetectCannon(fallback)
+	local real = PlayerGui:FindFirstChild("BattleScreen")
+	local btn = real and real:FindFirstChild("CannonButton", true)
+	if btn and btn:IsA("ImageButton") then
+		local id = tonumber(string.match(btn.Image, "%d+"))
+		if id then
+			for name, info in pairs(CannonLibrary) do
+				if id == info[2] or id == info[3] then
+					return name
+				end
+			end
+		end
+	end
+	return fallback
+end
+
+local function DetectBank(fallback)
+	local real = PlayerGui:FindFirstChild("BattleScreen")
+	local btn = real and real:FindFirstChild("BankButton", true)
+	if btn and btn:IsA("ImageButton") then
+		local id = tonumber(string.match(btn.Image, "%d+"))
+		if id then
+			for name, info in pairs(BankLibrary) do
+				if id == info.image or id == info.imageRed then
+					return name
+				end
+			end
+		end
+	end
+	return fallback
+end
+
+local function GetConfig()
+	local f = ConfigFolder
+	local cfg = {}
+	cfg.disable = f.DisableSpawnMenu.Value
+	cfg.sandbox = f.SandboxMode.Value
+	local mag = f.Magnification.Value
+	if mag == 0 then
+		mag = 1 + 0.2 * (math.max(f.UnitLevel.Value, 1) - 1)
+	end
+	cfg.mag = mag
+	local ff = f.ForceForm.Value
+	cfg.forceForm = ff ~= "" and ff or nil
+	cfg.cannonType = f.CannonType.Value
+	cfg.bankType = f.BankType.Value
+	cfg.color = f.LoadoutColor.Value
+	cfg.stars = math.clamp(f.Stars.Value, 1, 3)
+	cfg.stats = {}
+	for _, key in ipairs(STAT_KEYS) do
+		local sv = f:FindFirstChild("Stat" .. key)
+		cfg.stats[key] = sv and sv.Value or 0
+	end
+	cfg.slots = {}
+	for i = 1, 8 do
+		local sv = f:FindFirstChild("Slot" .. i)
+		cfg.slots[i] = sv and sv.Value or ""
+	end
+	return cfg
+end
+
+local CurrentGui = nil
+local Session = {}
+local RealVisible = {}
+local SlotData = {}
+local CannonState = { button = nil, busy = false, fallback = 45, name = "Default" }
+local BonusCount = 0
+local Swapped = false
+local Running = true
+local ActiveBar = "Bar1"
+local ResizeInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+local BarTween = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local BarPos = {
+	Bar1 = UDim2.fromScale(0.5, 0.8994443416595459),
+	Bar2 = UDim2.fromScale(0.5, 0.9800000190734863),
+}
+
+local Econ = {
+	bank = BankLibrary.Default,
+	stats = {},
+	stars = 1,
+	level = 1,
+	cash = 0,
+	run = 0,
+	sandbox = false,
+}
+
+local function StatOf(key)
+	return Econ.stats[key] or 0
+end
+
+-- base capacity (+250 per stat level), each level past 1 adds capMult of the base
+local function Capacity()
+	local b = Econ.bank
+	local base = b.capacity + 250 * StatOf("BankCapacity")
+	return math.floor(base * (1 + b.capMult * (Econ.level - 1)))
+end
+
+local function IncomePerTick()
+	local b = Econ.bank
+	return b.income + b.incMult * StatOf("BankIncome")
+end
+
+local function TickInterval()
+	return math.max(0.1 - Econ.level * 0.01, 0.01) * TICK_SCALE
+end
+
+local function UpgradeCost()
+	return math.floor((Econ.bank.bankCost + Econ.bank.costPerStat * StatOf("BankIncome")) * Econ.level)
+end
+
+local function StartCash()
+	local b = Econ.bank
+	return b.early + b.earlyAdd * StatOf("EarlyEconomy")
+end
+
+local function UnitLimit()
+	local b = Econ.bank
+	return b.limit + StatOf("UnitLimit")
+end
+
+local function RechargeSpeed()
+	local b = Econ.bank
+	return b.recharge * (1 + b.rechargeMult * StatOf("UnitRecharge"))
+end
+
+local function BountyTotal()
+	local b = Econ.bank
+	return b.bounty + b.bountyAdd * StatOf("EnemyBounty")
+end
+
+local function StarMultiplier()
+	return 1 + Econ.stars * 0.5 - 0.5
+end
+
+local function ResolveBind(name, fallback)
+	local ok, code = pcall(function()
+		return Enum.KeyCode[LocalPlayer.PlayerData.Settings[name].Value]
+	end)
+	if ok and code then return code end
+	return fallback
+end
+
+local function PlaySfx(name)
+	if CurrentGui then
+		CloneSound(CurrentGui.SFXFolder, CurrentGui.SFXFolder:FindFirstChild(name))
+	end
+end
+
+local function HideReal()
+	local real = PlayerGui:FindFirstChild("BattleScreen")
+	if not real then return end
+	for _, name in ipairs(REAL_HIDE) do
+		local obj = real:FindFirstChild(name, true)
+		if obj and obj:IsA("GuiObject") then
+			if RealVisible[obj] == nil then
+				local saved = obj:GetAttribute("SandboxOrigVisible")
+				if saved == nil then
+					saved = obj.Visible
+					obj:SetAttribute("SandboxOrigVisible", saved)
+				end
+				RealVisible[obj] = saved
+			end
+			obj.Visible = false
+		end
+	end
+end
+
+local function RestoreReal()
+	for obj, was in pairs(RealVisible) do
+		if obj and obj.Parent then
+			obj.Visible = was
+			obj:SetAttribute("SandboxOrigVisible", nil)
+		end
+	end
+	table.clear(RealVisible)
+end
+
+local function DisconnectSession()
+	for _, c in ipairs(Session) do
+		c:Disconnect()
+	end
+	table.clear(Session)
+end
+
+local NpcBase = setmetatable({}, { __mode = "k" })
+local LastAlive = nil
+local FlashNpcText
+local AddCash
+
+local function UpdateVisuals()
+	if not CurrentGui or not CurrentGui.Parent then return end
+	if Econ.sandbox then
+		Econ.cash = Capacity()
+	end
+	local alive = AliveCount()
+	local limit = UnitLimit()
+	local cap = Capacity()
+	local b = Econ.bank
+
+	local infoFrame = CurrentGui.Info
+	infoFrame.BankText.Text = math.floor(Econ.cash) .. " $"
+	infoFrame.BankText.CapText.Text = "/ " .. cap
+	infoFrame.NPCText.Text = alive .. "/" .. limit .. " NPCs"
+	if LastAlive ~= nil and alive ~= LastAlive then
+		FlashNpcText(alive > LastAlive)
+	end
+	LastAlive = alive
+
+	for _, info in pairs(SlotData) do
+		local btn = info.button
+		if btn and btn.Parent then
+			if info.busy or not info.data then
+				LightUp(btn, false)
+			else
+				local canPay = btn.Active and Econ.cash >= info.cost
+				LightUp(btn, canPay)
+				if canPay and alive >= limit then
+					btn.AutoButtonColor = false -- normal color, just not clickable
+				end
+			end
+		end
+	end
+
+	if CannonState.button and CannonState.button.Parent then
+		LightUp(CannonState.button, CannonState.button.Active and not CannonState.busy)
+	end
+
+	local bank = CurrentGui:FindFirstChild("BankButton")
+	if bank then
+		local maxed = Econ.level >= b.maxLevel
+		local cost = UpgradeCost()
+		bank.Upgrade.Text = maxed and "Maxed" or ("$" .. cost)
+		bank.Level.Text = "Level " .. Econ.level
+		LightUp(bank, maxed or Econ.cash >= cost)
+		if maxed then
+			bank.AutoButtonColor = false -- normal color, just not clickable
+		end
+	end
+end
+
+local function StartRecharge(button, duration, readyText, done)
+	duration = math.min(duration, 99999)
+	LightUp(button, false)
+	button.Active = false
+	local text = button:FindFirstChild("CostText")
+	if text then text.Visible = false end
+	local bar = button:FindFirstChild("Bar")
+	local progress = bar and bar:FindFirstChild("Progress")
+	if bar then bar.Visible = true end
+	if progress then
+		progress.Size = UDim2.fromScale(0, 1)
+		TweenService:Create(progress, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
+			Size = UDim2.fromScale(1, 1),
+		}):Play()
+	end
+
+	task.delay(duration, function()
+		if not button or not button.Parent then return end
+		button.Active = true
+		if text then
+			text.Text = readyText
+			text.Visible = true
+		end
+		if bar then bar.Visible = false end
+		if done then done() end
+		UpdateVisuals()
+	end)
+end
+
+local function SwitchBar(name)
+	if not CurrentGui then return end
+	ActiveBar = name
+	local menu = CurrentGui.MobileSpawnMenu
+	for _, barName in ipairs({ "Bar1", "Bar2" }) do
+		local bar = menu:FindFirstChild(barName)
+		if bar then
+			local active = barName == name
+			for _, d in ipairs(bar:GetDescendants()) do
+				if d:IsA("ImageLabel") or d:IsA("ImageButton") or d:IsA("Frame") or d:IsA("TextLabel") then
+					d.ZIndex = active and 100 or 1
+				end
+				if d:IsA("ImageButton") then
+					d.Selectable = active
+				end
+			end
+			TweenService:Create(bar, BarTween, {
+				Position = active and BarPos.Bar1 or BarPos.Bar2,
+			}):Play()
+		end
+	end
+end
+
+local function ToggleBar()
+	SwitchBar(ActiveBar == "Bar1" and "Bar2" or "Bar1")
+	PlaySfx("Click")
+end
+
+local SpawnLock = false
+local Pending = 0
+local Flipped = false
+
+local function SpawnUnit(index)
+	local info = SlotData[index]
+	if not info or not info.data or info.busy or not info.button.Active then return end
+	if AliveCount() + Pending >= UnitLimit() or Econ.cash < info.cost then
+		PlaySfx("Error")
+		return
+	end
+	local cfg = GetConfig()
+	local data = info.data
+	local form = cfg.forceForm or data[2] or "A"
+	Econ.cash = math.max(Econ.cash - info.cost, 0)
+	PlaySfx("Click")
+	info.busy = true
+	local duration = (data[3] or 5) / RechargeSpeed()
+	StartRecharge(info.button, duration, "$" .. info.cost, function()
+		info.busy = false
+	end)
+	UpdateVisuals()
+
+	Pending += 1
+	task.spawn(function()
+		while SpawnLock do task.wait() end
+		SpawnLock = true
+		local ok
+		local last = Pending <= 1
+		if info.friendly then
+			if not Flipped then
+				pcall(function() SandboxSettings:InvokeServer("SpawnTeamsSwap", false) end)
+				Flipped = true
+			end
+			ok = pcall(function()
+				SandboxSpawn:InvokeServer(FRIENDLY_SPAWN_TYPE, data[1], form, cfg.mag)
+			end)
+			if last then
+				pcall(function() SandboxSettings:InvokeServer("SpawnTeamsSwap", true) end)
+				Flipped = false
+			end
+		else
+			if Flipped then
+				pcall(function() SandboxSettings:InvokeServer("SpawnTeamsSwap", true) end)
+				Flipped = false
+			end
+			ok = pcall(function()
+				SandboxSpawn:InvokeServer("Enemy", data[1], form, cfg.mag)
+			end)
+		end
+		SpawnLock = false
+		Pending -= 1
+		if not ok then
+			PlaySfx("Error")
+			Econ.cash = math.min(Econ.cash + info.cost, Capacity())
+			UpdateVisuals()
+		end
+	end)
+end
+
+local function FireCannon()
+	local button = CannonState.button
+	if not button or CannonState.busy or not button.Active then
+		PlaySfx("Error")
+		return
+	end
+
+	local result
+	local ok = pcall(function()
+		result = PlayerSpawn:InvokeServer("Cannon", {
+			CameraPosition = workspace.CurrentCamera.CFrame.Position,
+		})
+	end)
+
+	local duration = (typeof(result) == "number" and result > 0) and result or nil
+	if not ok or not duration then
+		if ok and result then
+			duration = CannonState.fallback or 45
+		else
+			PlaySfx("Error")
+			return
+		end
+	end
+
+	PlaySfx("Click")
+	CannonState.busy = true
+	if CannonState.name == "Treasure" then
+		local before = BonusCount
+		task.delay(1.5, function()
+			if Running and CurrentGui and BonusCount == before then
+				AddCash(TREASURE_FALLBACK)
+			end
+		end)
+	end
+	StartRecharge(button, duration, "FIRE!", function()
+		CannonState.busy = false
+	end)
+end
+
+local function UpgradeBank()
+	if not CurrentGui then return end
+	if Econ.level >= Econ.bank.maxLevel then
+		PlaySfx("Error")
+		return
+	end
+	local cost = UpgradeCost()
+	if Econ.cash < cost then
+		PlaySfx("Error")
+		return
+	end
+	Econ.cash -= cost
+	Econ.level += 1
+	PlaySfx("Upgrade")
+	UpdateVisuals()
+end
+
+local function ShowBonusCash(amount)
+	if not CurrentGui or not CurrentGui.Parent or amount == 0 then return end
+	local positive = amount > 0
+	local textColor = positive and Color3.fromRGB(255, 255, 155) or Color3.fromRGB(255, 149, 0)
+	local startPos = UDim2.fromScale(math.random(650, 975) / 1000, math.random(500, 850) / 1000)
+	local label = New("TextLabel", CurrentGui.Info.BankText, {
+		Name = "BonusCash",
+		TextWrapped = true,
+		TextColor3 = YELLOW_TEXT,
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		Text = (positive and "+" or "") .. amount,
+		ZIndex = 5,
+		Size = UDim2.fromScale(0.2976406514644623, 0.3542453646659851),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Font = Enum.Font.LuckiestGuy,
+		BackgroundTransparency = 1,
+		Position = startPos,
+		Rotation = math.random(-12, 12),
+		TextScaled = true,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+		TextSize = 14,
+	})
+	Gradient(label, ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(217, 232, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(221, 135, 29)),
+	}))
+	local stroke = Stroke(label, Color3.fromRGB(95, 74, 0), 2.3287999629974365)
+	TweenService:Create(label, TweenInfo.new(1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Rotation = 0,
+		Position = startPos - UDim2.fromScale(0, 0.2),
+	}):Play()
+	TweenService:Create(stroke, TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.In), { Transparency = 1 }):Play()
+	TweenService:Create(label, TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.In), { TextTransparency = 1 }):Play()
+	TweenService:Create(label, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true), { TextColor3 = textColor }):Play()
+	task.delay(1, function()
+		label:Destroy()
+	end)
+	if CurrentGui.SFXFolder:FindFirstChild("Cash") then
+		PlaySfx("Cash")
+	end
+end
+
+FlashNpcText = function(gained)
+	if not CurrentGui or not CurrentGui.Parent then return end
+	local npc = CurrentGui.Info.NPCText
+	local base = NpcBase[npc]
+	if not base then
+		base = { size = npc.Size, color = npc.TextColor3 }
+		NpcBase[npc] = base
+	end
+	npc.Size = base.size
+	npc.TextColor3 = base.color
+	TweenService:Create(npc, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, true), {
+		TextColor3 = gained and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100),
+		Size = UDim2.fromScale(base.size.X.Scale * 1.2, base.size.Y.Scale * 1.2),
+	}):Play()
+end
+
+AddCash = function(amount)
+	local before = Econ.cash
+	Econ.cash = math.clamp(Econ.cash + amount, 0, Capacity())
+	ShowBonusCash(math.floor(Econ.cash - before))
+	UpdateVisuals()
+end
+
+local GREED = {
+	["Pirate Battler"] = { gain = 16, loss = 20 },
+	["Sailor Battler"] = { gain = 8.5, loss = 10 },
+}
+
+local function HookGreed(npc, friendly)
+	local greed = GREED[npc.Name]
+	if not greed or npc:GetAttribute("SandboxGreedHooked") then return end
+	npc:SetAttribute("SandboxGreedHooked", true)
+	npc:GetAttributeChangedSignal("WaitToMove"):Connect(function()
+		if not Running or not CurrentGui then return end
+		local wtm = npc:GetAttribute("WaitToMove")
+		if wtm == nil or wtm > 0 then return end
+		if friendly then
+			AddCash(math.floor(IncomePerTick() * greed.gain))
+		else
+			AddCash(-math.floor(greed.loss * (npc:GetAttribute("MagnificationStrength") or Econ.mag or 1)))
+		end
+	end)
+end
+
+local function WatchGreedFolder(folder, friendly)
+	for _, npc in folder:GetChildren() do
+		HookGreed(npc, friendly)
+	end
+	table.insert(Session, folder.ChildAdded:Connect(function(npc)
+		HookGreed(npc, friendly)
+	end))
+end
+
+local function OnEnemyDead(inst)
+	if not inst:IsA("Model") then return end
+	if inst:IsDescendantOf(BaseFolder) then return end
+	if inst:IsDescendantOf(FriendlyFolder) or CollectionService:HasTag(inst, "Friendly") then
+		-- enemy Treasure: a Gold-marked friendly unit dies -> lose 50% of its deploy cost
+		if inst:GetAttribute("GoldPenaltyPaid") or not inst:FindFirstChild("Gold", true) then return end
+		inst:SetAttribute("GoldPenaltyPaid", true)
+		local lib = FriendlyLibrary[inst.Name] or EnemyLibrary[inst.Name]
+		local cost = inst:GetAttribute("DeployCost") or (lib and lib[5] * StarMultiplier()) or 0
+		AddCash(-math.floor(cost * 0.5))
+		return
+	end
+	if inst:GetAttribute("BountyPaid") then return end
+	local isEnemy = CollectionService:HasTag(inst, "Enemy") or (EnemyFolder ~= nil and inst:IsDescendantOf(EnemyFolder))
+	if not isEnemy then return end
+	local hum = inst:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	inst:SetAttribute("BountyPaid", true)
+	local reward = math.floor(hum.MaxHealth * BOUNTY_BASE * BountyTotal())
+	if inst:FindFirstChild("Gold", true) then
+		reward = reward * GOLD_BOUNTY_MULT -- Treasure Gold effect
+	end
+	AddCash(reward)
+end
+
+local function StartEconomy()
+	Econ.run += 0.3
+	local run = Econ.run
+	task.spawn(function()
+		while Running and Econ.run == run do
+			task.wait(TickInterval())
+			if not Running or Econ.run ~= run then break end
+			Econ.cash = math.min(Econ.cash + IncomePerTick(), Capacity())
+			UpdateVisuals()
+		end
+	end)
+end
+
+local function HookHover(button, folder)
+	local sx, sy = button.Size.X.Scale, button.Size.Y.Scale
+	local grow = TweenService:Create(button, ResizeInfo, { Size = UDim2.new(sx * 1.08, 0, sy * 1.08, 0) })
+	local shrink = TweenService:Create(button, ResizeInfo, { Size = UDim2.new(sx, 0, sy, 0) })
+	table.insert(Session, button.MouseEnter:Connect(function()
+		if button.Active then
+			CloneSound(folder, folder.Hover)
+			grow:Play()
+		end
+	end))
+	table.insert(Session, button.MouseLeave:Connect(function()
+		shrink:Play()
+	end))
+end
+
+local function CreateUI(t)
+	local gui = New("ScreenGui", PlayerGui, {
+		Name = GUI_NAME,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 50,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	})
+
+	local sfx = New("Folder", gui, { Name = "SFXFolder" })
+	for name, id in pairs({ Hover = 4601634822, Click = 8617766509, Error = 9075457706, Upgrade = 2609873966 }) do
+		New("Sound", sfx, { Name = name, SoundId = "rbxassetid://" .. id, Volume = 1 })
+	end
+
+	-- Info (same layout as the real BattleScreen.Info)
+	local info = New("Frame", gui, {
+		Name = "Info",
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		Position = UDim2.fromScale(0.9963503479957581, -0.003703703638166189),
+		Size = UDim2.fromScale(0.10948905348777771, 0.1101851835846901),
+	})
+	New("UIAspectRatioConstraint", info, { AspectRatio = 1.7647058963775635 })
+
+	local function InfoText(name, parent, props, textColor, grad, strokeColor)
+		props.Name = name
+		props.TextWrapped = true
+		props.TextScaled = true
+		props.TextSize = 14
+		props.Text = ""
+		props.TextColor3 = textColor
+		props.Font = Enum.Font.LuckiestGuy
+		props.BackgroundTransparency = 1
+		props.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+		props.BorderColor3 = Color3.fromRGB(27, 42, 53)
+		props.AnchorPoint = Vector2.new(1, 0)
+		local l = New("TextLabel", parent, props)
+		Stroke(l, strokeColor, 2.3287999629974365)
+		Gradient(l, grad)
+		return l
+	end
+
+	local bankText = InfoText("BankText", info, {
+		Size = UDim2.fromScale(3.077969789505005, 0.6616142392158508),
+		Position = UDim2.fromScale(0.976330578327179, 0.14888958632946014),
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+	}, YELLOW_TEXT, YellowGrad, YELLOW_STROKE)
+	InfoText("CapText", bankText, {
+		Size = UDim2.fromScale(1.004435420036316, 0.3738459348678589),
+		Position = UDim2.fromScale(0.9978557825088501, 0.6169576644897461),
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+	}, YELLOW_TEXT, YellowGrad, YELLOW_STROKE)
+
+	local npcText = InfoText("NPCText", info, {
+		Size = UDim2.fromScale(0.9769999980926514, 0.25999999046325684),
+		Position = UDim2.fromScale(0.9779999852180481, 0.796999990940094),
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+	}, Color3.fromRGB(255, 255, 255), BlueGrad, BLUE_STROKE)
+	InfoText("CapText", npcText, {
+		Size = UDim2.fromScale(0.8420000076293945, 0.6000000238418579),
+		Position = UDim2.fromScale(1.3799999952316284, 0.6000000238418579),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+	}, Color3.fromRGB(255, 255, 255), BlueGrad, BLUE_STROKE)
+
+	-- Cannon
+	local cannon = New("ImageButton", gui, {
+		Name = "CannonButton",
+		ScaleType = Enum.ScaleType.Fit,
+		Active = true,
+		AutoButtonColor = false,
+		Selectable = false,
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		BackgroundColor3 = Color3.fromRGB(129, 129, 129),
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 1),
+		Image = "rbxassetid://14404777112",
+		Position = UDim2.fromScale(1, 1.0092593431472778),
+		Size = UDim2.fromScale(0.1589999943971634, 0.257999986410141),
+	})
+	local cBar = New("Frame", cannon, {
+		Name = "Bar",
+		Visible = false,
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundTransparency = 0.4,
+		Position = UDim2.fromScale(0.49849963188171387, 0.8238651156425476),
+		Size = UDim2.fromScale(0.761562168598175, 0.0981413722038269),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+	})
+	local cProg = New("Frame", cBar, {
+		Name = "Progress",
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromScale(0, 1),
+		BackgroundTransparency = 0.4,
+		BackgroundColor3 = t.fill,
+		BorderSizePixel = 0,
+	})
+	Gradient(cProg, t.barGrad)
+	Stroke(cProg, t.fillStroke, 3.1050665378570557)
+	Gradient(cBar, t.barGrad)
+	Stroke(cBar, t.barStroke, 3.1050665378570557)
+	local cText = New("TextLabel", cannon, {
+		Name = "CostText",
+		Text = "FIRE!",
+		TextWrapped = true,
+		TextScaled = true,
+		TextSize = 14,
+		TextColor3 = t.textColor,
+		Font = Enum.Font.LuckiestGuy,
+		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(0, 170, 255),
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		TextXAlignment = Enum.TextXAlignment.Right,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.4776798486709595, 0.6291422843933105),
+		Size = UDim2.fromScale(0.955359935760498, 0.3709999918937683),
+		ZIndex = 2,
+	})
+	Gradient(cText, t.mainGrad)
+	Stroke(cText, t.mainStroke, 3.1050665378570557)
+
+	-- Bank (Upgrade / Level labels positioned like the real one)
+	local bank = New("ImageButton", gui, {
+		Name = "BankButton",
+		ScaleType = Enum.ScaleType.Fit,
+		Selectable = false,
+		AnchorPoint = Vector2.new(0, 1),
+		Image = "rbxassetid://13195474128",
+		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		Position = UDim2.fromScale(0.004171011503785849, 1.0085557699203491),
+		Size = UDim2.fromScale(0.1589762568473816, 0.2577996850013733),
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		Active = true,
+		AutoButtonColor = false,
+	})
+	local upgrade = New("TextLabel", bank, {
+		Name = "Upgrade",
+		Text = "",
+		TextWrapped = true,
+		TextScaled = true,
+		TextSize = 14,
+		TextColor3 = YELLOW_TEXT,
+		Font = Enum.Font.LuckiestGuy,
+		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(0, 170, 255),
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5363335013389587, 0.6249855756759644),
+		Size = UDim2.fromScale(0.9992448687553406, 0.25266194343566895),
+	})
+	Stroke(upgrade, YELLOW_STROKE, 2.3287999629974365)
+	Gradient(upgrade, YellowGrad)
+	local level = New("TextLabel", bank, {
+		Name = "Level",
+		Text = "Level 1",
+		TextWrapped = true,
+		TextScaled = true,
+		TextSize = 14,
+		TextColor3 = Color3.fromRGB(255, 255, 255),
+		Font = Enum.Font.LuckiestGuy,
+		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(0, 170, 255),
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.538126528263092, 0.838405966758728),
+		Size = UDim2.fromScale(0.968691885471344, 0.12048866599798203),
+	})
+	Stroke(level, BLUE_STROKE, 2.3287999629974365)
+	Gradient(level, BlueGrad)
+
+	local menu = New("Frame", gui, {
+		Name = "MobileSpawnMenu",
+		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BorderColor3 = Color3.fromRGB(27, 42, 53),
+		Size = UDim2.fromScale(1, 1),
+	})
+
+	local function CreateBar(name, position, size)
+		return New("Frame", menu, {
+			Name = name,
+			Active = true,
+			AnchorPoint = Vector2.new(0.5, 1),
+			BackgroundTransparency = 1,
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			BorderColor3 = Color3.fromRGB(27, 42, 53),
+			Position = position,
+			Size = size,
+		})
+	end
+
+	local Bar1 = CreateBar("Bar1", BarPos.Bar1, UDim2.fromScale(0.44396233558654785, 0.061917614191770554))
+	local Bar2 = CreateBar("Bar2", BarPos.Bar2, UDim2.fromScale(0.4440000057220459, 0.06199999898672104))
+
+	local function CreateSlot(parent, name, layoutOrder)
+		local s = New("ImageButton", parent, {
+			Name = name,
+			ScaleType = Enum.ScaleType.Crop,
+			Active = false,
+			AutoButtonColor = false,
+			Selectable = false,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Image = "",
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			BorderColor3 = Color3.fromRGB(27, 42, 53),
+			Size = UDim2.fromScale(parent == Bar1 and 0.28153836727142334 or 0.28200000524520874, 1),
+			LayoutOrder = layoutOrder,
+		})
+		Gradient(s, SlotGradient)
+		Stroke(s, t.slotStroke, 3.881333351135254, Enum.ApplyStrokeMode.Border)
+
+		local sb = New("Frame", s, {
+			Name = "Bar",
+			Visible = false,
+			BorderColor3 = Color3.fromRGB(27, 42, 53),
+			AnchorPoint = Vector2.new(0.5, 0),
+			BackgroundTransparency = 0.4,
+			Position = UDim2.fromScale(0.5, 0.7730000019073486),
+			Size = UDim2.fromScale(0.8759999871253967, 0.11999999731779099),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		})
+		local sp = New("Frame", sb, {
+			Name = "Progress",
+			BorderColor3 = Color3.fromRGB(27, 42, 53),
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.fromScale(0, 0.5),
+			Size = UDim2.fromScale(0, 1),
+			BorderSizePixel = 0,
+			BackgroundTransparency = 0.4,
+			BackgroundColor3 = t.fill,
+		})
+		Gradient(sp, t.barGrad)
+		Stroke(sp, t.fillStroke, 3.1050665378570557)
+		Gradient(sb, t.barGrad)
+		Stroke(sb, t.barStroke, 3.1050665378570557)
+
+		local st = New("TextLabel", s, {
+			Name = "CostText",
+			Visible = false,
+			Text = "",
+			TextWrapped = true,
+			TextScaled = true,
+			TextSize = 14,
+			TextColor3 = YELLOW_TEXT,
+			Font = Enum.Font.LuckiestGuy,
+			BackgroundTransparency = 1,
+			BackgroundColor3 = Color3.fromRGB(0, 170, 255),
+			BorderColor3 = Color3.fromRGB(27, 42, 53),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromScale(0.45093825459480286, 0.7728815674781799),
+			Size = UDim2.fromScale(1.0980000495910645, 0.550000011920929),
+		})
+		Gradient(st, YellowGrad)
+		Stroke(st, YELLOW_STROKE, 2.3287999629974365)
+		return s
+	end
+
+	for i = 1, 4 do CreateSlot(Bar1, "Slot" .. i, i) end
+	for i = 5, 8 do CreateSlot(Bar2, "Slot" .. i, i - 4) end
+
+	for _, parent in ipairs({ Bar1, Bar2 }) do
+		New("UIListLayout", parent, {
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			Padding = UDim.new(0.03999999910593033, 0),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		})
+	end
+
+	return gui
+end
+
+local function Enter()
+	if CurrentGui then return end
+	local cfg = GetConfig()
+	if cfg.disable then return end
+
+	if not Swapped then
+		pcall(function()
+			SandboxSettings:InvokeServer("SpawnTeamsSwap", true)
+		end)
+		Swapped = true
+	end
+
+	local okBank, bName = pcall(DetectBank, cfg.bankType)
+	if not okBank or not BankLibrary[bName] then
+		bName = BankLibrary[cfg.bankType] and cfg.bankType or "Default"
+	end
+	Econ.bank = BankLibrary[bName]
+	Econ.stats = cfg.stats
+	Econ.stars = DetectStars(cfg.stars)
+	Econ.mag = cfg.mag
+	LastAlive = nil
+	Econ.sandbox = cfg.sandbox
+	Econ.level = cfg.sandbox and Econ.bank.maxLevel or 1
+	Econ.cash = cfg.sandbox and Capacity() or StartCash()
+
+	HideReal()
+	CurrentTheme = GetTheme(cfg.color)
+	CurrentGui = CreateUI(CurrentTheme)
+
+	local okCannon, cName = pcall(DetectCannon, cfg.cannonType)
+	if not okCannon or not CannonLibrary[cName] then
+		cName = CannonLibrary[cfg.cannonType] and cfg.cannonType or "Default"
+	end
+	local cInfo = CannonLibrary[cName] or CannonLibrary.Default
+	local isBlue = string.lower(tostring(cfg.color)) == "blue"
+	local cannon = CurrentGui.CannonButton
+	cannon.Image = "rbxassetid://" .. (isBlue and cInfo[3] or cInfo[2])
+	CannonState.name = cName
+	cannon.CostText.Text = "FIRE!"
+	CannonState.button = cannon
+	CannonState.busy = false
+	CannonState.fallback = cInfo[1]
+	HookHover(cannon, CurrentGui.SFXFolder)
+	table.insert(Session, cannon.Activated:Connect(FireCannon))
+		if isBlue then
+		local myGui = CurrentGui
+		task.delay(0, function()
+			if not Running or CurrentGui ~= myGui or not cannon.Parent then return end
+			CannonState.busy = true
+			StartRecharge(cannon, cInfo[1], "FIRE!", function()
+				CannonState.busy = false
+			end)
+		end)
+	end
+
+	local bank = CurrentGui.BankButton
+	bank.Image = "rbxassetid://" .. (string.lower(tostring(cfg.color)) == "blue" and Econ.bank.image or Econ.bank.imageRed)
+	HookHover(bank, CurrentGui.SFXFolder)
+	table.insert(Session, bank.Activated:Connect(UpgradeBank))
+
+	for i = 1, 8 do
+		local button = CurrentGui.MobileSpawnMenu:FindFirstChild("Slot" .. i, true)
+		local data, friendly = ResolveUnit(cfg.slots[i])
+		local cost = data and math.floor(data[5] * StarMultiplier()) or 0
+		SlotData[i] = { button = button, data = data, friendly = friendly, busy = false, cost = cost }
+		if data then
+			button.Image = "rbxassetid://" .. data[4]
+			button.CostText.Text = "$" .. cost
+			button.CostText.Visible = true
+			button.Active = true
+			LightUp(button, true)
+			HookHover(button, CurrentGui.SFXFolder)
+			table.insert(Session, button.Activated:Connect(function()
+				SpawnUnit(i)
+			end))
+		else
+			button.Image = ""
+			button.CostText.Visible = false
+			button.Active = false
+			LightUp(button, false)
+		end
+	end
+
+	SwitchBar("Bar1")
+
+	local binds = {
+		[ResolveBind("CannonBind", Enum.KeyCode.E)] = FireCannon,
+		[ResolveBind("BankBind", Enum.KeyCode.Q)] = UpgradeBank,
+		[ResolveBind("SwitchBind", Enum.KeyCode.Space)] = ToggleBar,
+		[Enum.KeyCode.ButtonX] = ToggleBar,
+		[Enum.KeyCode.ButtonL2] = UpgradeBank,
+		[Enum.KeyCode.ButtonR2] = FireCannon,
+	}
+	local numberKeys = {
+		Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four,
+		Enum.KeyCode.Five, Enum.KeyCode.Six, Enum.KeyCode.Seven, Enum.KeyCode.Eight,
+	}
+	for i, key in ipairs(numberKeys) do
+		binds[key] = function()
+			SpawnUnit(i)
+		end
+	end
+	table.insert(Session, UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton3 then
+			ToggleBar()
+			return
+		end
+		local fn = binds[input.KeyCode]
+		if fn then fn() end
+	end))
+
+	table.insert(Session, CollectionService:GetInstanceAddedSignal("Dead"):Connect(function(inst)
+		local ok, err = pcall(OnEnemyDead, inst)
+		if not ok then warn("[SandboxSpawnUI] OnEnemyDead: " .. tostring(err)) end
+	end))
+
+	-- Treasure cash: server sends +amount (your Treasure) or -amount (enemy Treasure)
+	local remoteEvents = Events:FindFirstChild("RemoteEvents")
+	local bonusEvent = remoteEvents and remoteEvents:FindFirstChild("BonusCashNotify")
+	if bonusEvent and bonusEvent:IsA("RemoteEvent") then
+		table.insert(Session, bonusEvent.OnClientEvent:Connect(function(amount)
+			if typeof(amount) ~= "number" then return end
+			BonusCount += 1
+			AddCash(amount)
+		end))
+	end
+
+	EnemyFolder = EnemyFolder or NPCFolders:FindFirstChild("EnemyFolder")
+	WatchGreedFolder(FriendlyFolder, true)
+	if EnemyFolder then
+		WatchGreedFolder(EnemyFolder, false)
+	end
+
+	UpdateVisuals()
+	StartEconomy()
+end
+
+local function Leave()
+	Econ.run += 1
+	DisconnectSession()
+	if CurrentGui then
+		CurrentGui:Destroy()
+		CurrentGui = nil
+	end
+	table.clear(SlotData)
+	CannonState.button = nil
+	CannonState.busy = false
+	Swapped = false
+	RestoreReal()
+end
+
+_G.SandboxSpawnCleanup = function()
+	Running = false
+	Leave()
+end
+
+task.spawn(function()
+	while Running do
+		if GenValue.Value ~= MyGen then
+			Running = false
+			Econ.run += 1
+			DisconnectSession()
+			break
+		end
+		local disable = ConfigFolder:FindFirstChild("DisableSpawnMenu") and ConfigFolder.DisableSpawnMenu.Value
+		local inside = IsSandbox()
+		local dead = IsEitherBaseDead()
+
+		if dead then
+			if CurrentGui then
+				Leave()
+			end
+		elseif inside and not disable then
+			HideReal()
+			if not CurrentGui or not CurrentGui.Parent then
+				local ok, err = xpcall(Enter, debug.traceback)
+				if not ok then
+					warn("[SandboxSpawnUI] Enter failed: " .. tostring(err))
+					Leave()
+					task.wait(3)
+				end
+			else
+				UpdateVisuals()
+			end
+		elseif CurrentGui then
+			Leave()
+		end
+		task.wait(0.25)
+	end
+end)
+
+print("[SandboxSpawnUI] watching Blue Base.Sandbox — GUI name is SandboxSpawnUI")
