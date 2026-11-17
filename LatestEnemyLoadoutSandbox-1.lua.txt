@@ -67,14 +67,14 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[114] = "Fraud",
-	[114] = "Fraud",
-	[114] = "Fraud",
-	[114] = "Fraud",
-	[114] = "Fraud",
-	[114] = "Fraud",
-	[114] = "Fraud",
-	[114] = "Fraud",
+	[1] = "Fraud",
+	[2] = "Fraud",
+	[3] = "Fraud",
+	[4] = "Fraud",
+	[5] = "Fraud",
+	[6] = "Fraud",
+	[7] = "Fraud",
+	[8] = "Fraud",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
