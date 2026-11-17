@@ -53,7 +53,7 @@ local DEFAULT_DISABLE = false
 local DEFAULT_SANDBOX = false
 local DEFAULT_UNIT_LEVEL = 10
 local DEFAULT_MAG = nil
-local DEFAULT_FORM = nil
+local DEFAULT_FORM = B
 local DEFAULT_CANNON = "Default"
 local DEFAULT_BANK = "Default"
 local DEFAULT_COLOR = "Red"
@@ -68,13 +68,13 @@ local DEFAULT_STATS = {
 }
 local DEFAULT_SLOTS = {
 	[1] = "Infernus",
-	[2] = "Lil Infernus",
-	[3] = "Lil Infernus",
-	[4] = "Lil Infernus",
-	[5] = "Lil Infernus",
-	[6] = "Lil Infernus",
-	[7] = "Lil Infernus",
-	[8] = "Lil Infernus",
+	[2] = "Lil Turking",
+	[3] = "Lil Turking",
+	[4] = "Lil Turking",
+	[5] = "Lil Turking",
+	[6] = "Lil Turking",
+	[7] = "Lil Turking",
+	[8] = "Lil Turking",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
