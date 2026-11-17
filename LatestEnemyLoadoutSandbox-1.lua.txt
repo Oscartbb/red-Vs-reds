@@ -67,14 +67,14 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[1] = "Fraud",
+	[1] = "Vemonshank",
 	[2] = "Fraud",
-	[3] = "Fraud",
-	[4] = "Fraud",
-	[5] = "Fraud",
-	[6] = "Fraud",
-	[7] = "Fraud",
-	[8] = "Fraud",
+	[3] = "Spambox Battler",
+	[4] = "Drakocage",
+	[5] = "Sign Buddy",
+	[6] = "Dopamine",
+	[7] = "Flower",
+	[8] = "Oscar",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
