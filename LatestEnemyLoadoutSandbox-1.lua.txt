@@ -67,14 +67,14 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[1] = "Battler",
-	[2] = "Trowel Battler",
-	[3] = "Sword Battler",
-	[4] = "Slinger Battler",
-	[5] = "Baller Battler",
-	[6] = "Rocket Battler",
-	[7] = "Bomb Battler",
-	[8] = "Titan Battler",
+	[114] = "Fraud",
+	[114] = "Fraud",
+	[114] = "Fraud",
+	[114] = "Fraud",
+	[114] = "Fraud",
+	[114] = "Fraud",
+	[114] = "Fraud",
+	[114] = "Fraud",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
