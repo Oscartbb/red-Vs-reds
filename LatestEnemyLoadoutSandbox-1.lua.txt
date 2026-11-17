@@ -67,14 +67,14 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[1] = "Infernus",
-	[2] = "Lil Turking",
-	[3] = "Lil Turking",
-	[4] = "Lil Turking",
-	[5] = "Lil Turking",
-	[6] = "Lil Turking",
-	[7] = "Lil Turking",
-	[8] = "Lil Turking",
+	[1] = "Oscar",
+	[2] = "Oscar",
+	[3] = "Oscar",
+	[4] = "Oscar",
+	[5] = "Oscar",
+	[6] = "Oscar",
+	[7] = "Oscar",
+	[8] = "Oscar",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
