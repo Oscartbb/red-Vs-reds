@@ -67,14 +67,14 @@ local DEFAULT_STATS = {
 	EarlyEconomy = 20,
 }
 local DEFAULT_SLOTS = {
-	[1] = "Oscar",
-	[2] = "Oscar",
-	[3] = "Oscar",
-	[4] = "Oscar",
-	[5] = "Oscar",
-	[6] = "Oscar",
-	[7] = "Oscar",
-	[8] = "Oscar",
+	[1] = "Goon",
+	[2] = "Giant Noob",
+	[3] = "Supergoon",
+	[4] = "Punkslayer",
+	[5] = "Techninja",
+	[6] = "Soul of speed",
+	[7] = "Soul of regen",
+	[8] = "Soul of gravity",
 }
 
 local STAT_KEYS = { "BankCapacity", "BankIncome", "EnemyBounty", "UnitRecharge", "UnitLimit", "EarlyEconomy" }
